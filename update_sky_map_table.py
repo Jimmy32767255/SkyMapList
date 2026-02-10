@@ -52,6 +52,27 @@ def parse_strings_file(file_path: Path) -> Dict[str, str]:
     
     return translations
 
+def get_translation_key(identifier: str, translations: Dict[str, str]) -> Tuple[str, str]:
+    """
+    根据标识符生成翻译键并查找翻译
+    优先使用 name_标识符，如果没有找到则使用 title_标识符_01
+    返回: (翻译键, 实际使用的翻译键)
+    """
+    # 尝试 name_标识符
+    name_key = f"name_{identifier.lower()}"
+    
+    # 如果 name_标识符 在翻译文件中存在，直接使用
+    if name_key in translations:
+        return name_key, name_key
+    
+    # 否则尝试 title_标识符_01
+    title_key = f"title_{identifier.lower()}_01"
+    if title_key in translations:
+        return title_key, title_key
+    
+    # 两个都没有找到
+    return "", ""
+
 def read_existing_table(table_path: Path) -> Tuple[List[str], Dict[str, Dict[str, str]], List[str]]:
     """
     读取现有的Markdown表格，提取表头、现有数据和非表格内容
@@ -120,13 +141,11 @@ def read_existing_table(table_path: Path) -> Tuple[List[str], Dict[str, Dict[str
     
     return headers, existing_data, non_table_content
 
-def get_translation_key(identifier: str) -> str:
+def is_empty_or_whitespace(value: str) -> bool:
     """
-    根据标识符生成翻译键
-    例如: Day -> name_day
+    检查字符串是否为空或只有空格
     """
-    # 将标识符转换为小写，并在前面加上"name_"
-    return f"name_{identifier.lower()}"
+    return not value or value.strip() == ''
 
 def merge_table_data(
     identifiers: List[str],
@@ -136,6 +155,7 @@ def merge_table_data(
 ) -> Dict[str, Dict[str, str]]:
     """
     合并表格数据：已有数据保持不变，只添加新数据
+    对于已有数据，如果中英文名或翻译键为空，则尝试填充
     """
     merged_data = {}
     
@@ -143,42 +163,63 @@ def merge_table_data(
     for identifier, data in existing_data.items():
         merged_data[identifier] = data.copy()
     
-    # 然后添加新标识符的数据
+    # 然后处理所有标识符
     new_count = 0
+    updated_count = 0
+    
     for identifier in sorted(identifiers):
-        if identifier in merged_data:
-            # 已存在，跳过
-            continue
-        
-        translation_key = get_translation_key(identifier)
+        translation_key, actual_key = get_translation_key(identifier, english_translations)
         
         # 获取中文名和英文名
-        chinese_name = chinese_translations.get(translation_key, '')
-        english_name = english_translations.get(translation_key, '')
+        chinese_name = chinese_translations.get(actual_key, '') if actual_key else ''
+        english_name = english_translations.get(actual_key, '') if actual_key else ''
         
         # 如果两个翻译都没有找到，翻译键也置空
         if not chinese_name and not english_name:
             translation_key = ''
+            actual_key = ''
         
-        # 创建新条目
-        merged_data[identifier] = {
-            '标识符': identifier,
-            '中文名': chinese_name,
-            '玩家社区称呼': '',
-            '英文名': english_name,
-            '翻译键': translation_key if translation_key else '',
-            '存在版本': '',
-            '隶属于': '',
-            '截图': '',
-            '注释': ''
-        }
-        new_count += 1
-        
-        # 调试信息
-        if not chinese_name and not english_name:
-            print(f"调试: 新标识符 {identifier} 未找到翻译，翻译键: {get_translation_key(identifier)}")
+        if identifier in merged_data:
+            # 已有数据，检查是否需要更新空字段
+            existing_entry = merged_data[identifier]
+            updated = False
+            
+            # 检查中英文名和翻译键是否为空
+            if is_empty_or_whitespace(existing_entry.get('中文名', '')) and chinese_name:
+                existing_entry['中文名'] = chinese_name
+                updated = True
+            
+            if is_empty_or_whitespace(existing_entry.get('英文名', '')) and english_name:
+                existing_entry['英文名'] = english_name
+                updated = True
+            
+            if is_empty_or_whitespace(existing_entry.get('翻译键', '')) and actual_key:
+                existing_entry['翻译键'] = actual_key
+                updated = True
+            
+            if updated:
+                updated_count += 1
+                print(f"更新了已有标识符 '{identifier}' 的空字段")
+        else:
+            # 创建新条目
+            merged_data[identifier] = {
+                '标识符': identifier,
+                '中文名': chinese_name,
+                '玩家社区称呼': '',
+                '英文名': english_name,
+                '翻译键': actual_key if actual_key else '',
+                '存在版本': '',
+                '隶属于': '',
+                '截图': '',
+                '注释': ''
+            }
+            new_count += 1
+            
+            # 调试信息
+            if not chinese_name and not english_name:
+                print(f"调试: 新标识符 {identifier} 未找到翻译，尝试了 name_{identifier.lower()} 和 title_{identifier.lower()}_01")
     
-    print(f"新增了 {new_count} 条记录，保留了 {len(existing_data)} 条原有记录")
+    print(f"新增了 {new_count} 条记录，更新了 {updated_count} 条已有记录的空字段，保留了 {len(existing_data)} 条原有记录")
     return merged_data
 
 def write_table(table_path: Path, headers: List[str], data: Dict[str, Dict[str, str]], non_table_content: List[str]):
@@ -314,7 +355,7 @@ def main():
     print(f"英文翻译: {len(english_translations)} 条")
     
     # 测试一些翻译键
-    test_keys = ['name_day', 'name_sk8', 'name_dawn', 'name_dusk']
+    test_keys = ['name_day', 'name_sk8', 'name_dawn', 'name_dusk', 'title_day_01', 'title_sk8_01']
     print("\n测试翻译键查找:")
     for key in test_keys:
         cn = chinese_translations.get(key, '未找到')
@@ -326,7 +367,7 @@ def main():
     print(f"\n表格列头: {headers}")
     print(f"现有表格中有 {len(existing_data)} 条记录")
     
-    # 4. 合并数据（不覆盖已有数据）
+    # 4. 合并数据（不覆盖已有数据，但填充空字段）
     print("正在合并表格数据...")
     merged_data = merge_table_data(identifiers, chinese_translations, english_translations, existing_data)
     
